@@ -19,8 +19,8 @@ BLUE = (0, 0, 255)
 GRAVITY = 0.5
 FLAP_STRENGTH = -10
 PIPE_WIDTH = 80
-PIPE_HEIGHT = 500
-PIPE_GAP = 150
+PIPE_GAP = 150  # Increased pipe gap
+PIPE_DISTANCE = 300  # Increased distance between pipes
 BIRD_WIDTH = 40
 BIRD_HEIGHT = 30
 
@@ -44,6 +44,12 @@ class Bird:
     def draw(self, screen):
         pygame.draw.rect(screen, BLUE, (self.x, self.y, BIRD_WIDTH, BIRD_HEIGHT))
 
+    def get_mask(self):
+        return pygame.mask.from_surface(pygame.Surface((BIRD_WIDTH, BIRD_HEIGHT)))
+
+    def get_position(self):
+        return (self.x, self.y, self.x + BIRD_WIDTH, self.y + BIRD_HEIGHT)
+
 # Pipe class
 class Pipe:
     def __init__(self, x):
@@ -57,6 +63,11 @@ class Pipe:
     def draw(self, screen):
         pygame.draw.rect(screen, BLACK, (self.x, 0, PIPE_WIDTH, self.height))
         pygame.draw.rect(screen, BLACK, (self.x, self.height + PIPE_GAP, PIPE_WIDTH, SCREEN_HEIGHT))
+
+    def get_rects(self):
+        top_rect = pygame.Rect(self.x, 0, PIPE_WIDTH, self.height)
+        bottom_rect = pygame.Rect(self.x, self.height + PIPE_GAP, PIPE_WIDTH, SCREEN_HEIGHT - (self.height + PIPE_GAP))
+        return (top_rect, bottom_rect)
 
 # Game function
 def game(genomes, config):
@@ -74,7 +85,10 @@ def game(genomes, config):
         genome.fitness = 0
         ge.append(genome)
 
-    pipes = [Pipe(SCREEN_WIDTH + i * 300) for i in range(3)]
+    pipes = []
+    pipes.append(Pipe(SCREEN_WIDTH + PIPE_DISTANCE))  # Initial pipes
+    pipes.append(Pipe(SCREEN_WIDTH + 2 * PIPE_DISTANCE))
+    pipes.append(Pipe(SCREEN_WIDTH + 3 * PIPE_DISTANCE))
 
     score = 0
     running = True
@@ -86,46 +100,62 @@ def game(genomes, config):
             if event.type == pygame.QUIT:
                 running = False
 
+        # Manage pipes
+        for i in range(len(pipes)-1, -1, -1):
+            pipes[i].update()
+            pipes[i].draw(screen)
+
+            # Check collision with birds
+            for bird in birds:
+                for rect in pipes[i].get_rects():
+                    bird_rect = pygame.Rect(bird.x, bird.y, BIRD_WIDTH, BIRD_HEIGHT)
+                    if bird_rect.colliderect(rect):
+                        bird.alive = False
+                        ge[birds.index(bird)].fitness -= 1
+
+            if pipes[i].x < -PIPE_WIDTH:
+                pipes.pop(i)
+
+        if pipes[-1].x < SCREEN_WIDTH - PIPE_DISTANCE:  # Spawn a new pipe ahead of the last pipe
+            pipes.append(Pipe(SCREEN_WIDTH + PIPE_DISTANCE))
+
+        # Manage birds
         for i, bird in enumerate(birds):
             if bird.alive:
-                pipe_ind = 0 if bird.x < pipes[0].x + PIPE_WIDTH else 1
-                inputs = (
-                    bird.y,
-                    bird.velocity,
-                    pipes[pipe_ind].height,
-                    pipes[pipe_ind].height + PIPE_GAP,
-                    pipes[pipe_ind].x - bird.x,
-                )
-                output = nets[i].activate(inputs)
-                if output[0] > 0.5:
-                    bird.flap()
-
-                bird.update()
-                bird.draw(screen)
-
-                ge[i].fitness += 0.1
-
+                closest_pipe = None
+                closest_dist = float('inf')
                 for pipe in pipes:
-                    if bird.x + BIRD_WIDTH > pipe.x and bird.x < pipe.x + PIPE_WIDTH:
-                        if bird.y < pipe.height or bird.y + BIRD_HEIGHT > pipe.height + PIPE_GAP:
-                            bird.alive = False
-                            ge[i].fitness -= 1
+                    if pipe.x > bird.x:
+                        dist = pipe.x - bird.x
+                        if dist < closest_dist:
+                            closest_dist = dist
+                            closest_pipe = pipe
 
-        for pipe in pipes:
-            pipe.update()
-            pipe.draw(screen)
-            if pipe.x + PIPE_WIDTH < birds[0].x and not pipe.passed:
-                pipe.passed = True
-                score += 1
-                for g in ge:
-                    g.fitness += 5
+                if closest_pipe:
+                    inputs = (
+                        bird.y,
+                        bird.velocity,
+                        closest_pipe.height,
+                        closest_pipe.height + PIPE_GAP,
+                        closest_pipe.x - bird.x,
+                    )
+                    output = nets[i].activate(inputs)
+                    if output[0] > 0.5:
+                        bird.flap()
 
+                    bird.update()
+                    bird.draw(screen)
+
+                    ge[i].fitness += 0.1
+
+        # Remove dead birds
         for bird in birds:
             if not bird.alive:
-                nets.remove(nets[birds.index(bird)])
-                ge.remove(ge[birds.index(bird)])
-                birds.remove(bird)
+                nets.pop(birds.index(bird))
+                ge.pop(birds.index(bird))
+                birds.pop(birds.index(bird))
 
+        # Exit game if no birds are alive
         if not birds:
             running = False
 
